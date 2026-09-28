@@ -1,0 +1,59 @@
+name: Build Echo Vault
+
+on:
+  push:
+  workflow_dispatch:   # adds a "Run workflow" button on the Actions tab
+
+jobs:
+  dsp-tests:
+    name: Reverb engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run offline render test
+        run: |
+          g++ -O2 -std=c++17 -I Source Tests/RenderTest.cpp -o render_test
+          ./render_test
+
+  build-mac:
+    name: macOS plugin (Apple Silicon + Intel)
+    runs-on: macos-14
+    needs: dsp-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build VST3 + AU
+        run: cmake --build build --config Release -j 4
+
+      - name: Sign (ad-hoc) and package
+        run: |
+          set -e
+          ART=build/EchoVault_artefacts/Release
+          mkdir -p dist/EchoVault
+          cp -R "$ART/VST3/Echo Vault.vst3" dist/EchoVault/
+          cp -R "$ART/AU/Echo Vault.component" dist/EchoVault/
+          codesign --force --deep --sign - "dist/EchoVault/Echo Vault.vst3"
+          codesign --force --deep --sign - "dist/EchoVault/Echo Vault.component"
+          lipo -info "dist/EchoVault/Echo Vault.vst3/Contents/MacOS/Echo Vault"
+          cp Installer/install-echo-vault.command dist/EchoVault/
+          chmod +x dist/EchoVault/install-echo-vault.command
+          cp INSTALL.md dist/EchoVault/
+          cd dist && ditto -c -k --sequesterRsrc --keepParent EchoVault EchoVault-macOS.zip
+
+      - name: Validate with pluginval
+        continue-on-error: true
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 8 --validate-in-process \
+            "dist/EchoVault/Echo Vault.vst3"
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: EchoVault-macOS
+          path: dist/EchoVault-macOS.zip
+          retention-days: 90
